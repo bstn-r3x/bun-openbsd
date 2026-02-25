@@ -652,7 +652,7 @@ pub const StandaloneModuleGraph = struct {
         }
     };
 
-    pub fn inject(bytes: []const u8, self_exe: [:0]const u8, inject_options: InjectOptions, target: *const CompileTarget) bun.FileDescriptor {
+    pub fn inject(bytes: []const u8, self_exe: [:0]const u8, inject_options: InjectOptions, target: *const CompileTarget, temp_path_out: ?*bun.PathBuffer) bun.FileDescriptor {
         var buf: bun.PathBuffer = undefined;
         var zname: [:0]const u8 = bun.fs.FileSystem.tmpname("bun-build", &buf, @as(u64, @bitCast(std.time.milliTimestamp()))) catch |err| {
             Output.prettyErrorln("<r><red>error<r><d>:<r> failed to get temporary file name: {s}", .{@errorName(err)});
@@ -670,6 +670,15 @@ pub const StandaloneModuleGraph = struct {
                 _ = Syscall.unlink(name);
             }
         }.toClean;
+
+        const recordTempPath = struct {
+            pub fn write(out: ?*bun.PathBuffer, name: [:0]const u8) void {
+                if (out) |buf_out| {
+                    @memcpy(buf_out[0..name.len], name);
+                    buf_out[name.len] = 0;
+                }
+            }
+        }.write;
 
         const cloned_executable_fd: bun.FileDescriptor = brk: {
             if (comptime Environment.isWindows) {
@@ -840,6 +849,7 @@ pub const StandaloneModuleGraph = struct {
                 if (comptime !Environment.isWindows) {
                     _ = bun.c.fchmod(cloned_executable_fd.native(), 0o777);
                 }
+                recordTempPath(temp_path_out, zname);
                 return cloned_executable_fd;
             },
             .windows => {
@@ -883,6 +893,7 @@ pub const StandaloneModuleGraph = struct {
                 if (comptime !Environment.isWindows) {
                     _ = bun.c.fchmod(cloned_executable_fd.native(), 0o777);
                 }
+                recordTempPath(temp_path_out, zname);
                 return cloned_executable_fd;
             },
             else => {
@@ -951,6 +962,7 @@ pub const StandaloneModuleGraph = struct {
                     _ = bun.c.fchmod(cloned_executable_fd.native(), 0o777);
                 }
 
+                recordTempPath(temp_path_out, zname);
                 return cloned_executable_fd;
             },
         }
@@ -994,6 +1006,7 @@ pub const StandaloneModuleGraph = struct {
             };
         }
 
+        recordTempPath(temp_path_out, zname);
         return cloned_executable_fd;
     }
 
@@ -1105,11 +1118,13 @@ pub const StandaloneModuleGraph = struct {
             allocator.free(self_exe);
         };
 
+        var injected_temp_path_buf: bun.PathBuffer = undefined;
         var fd = inject(
             bytes,
             self_exe,
             windows_options,
             target,
+            if (comptime Environment.isOpenBSD) &injected_temp_path_buf else null,
         );
         defer if (fd != bun.invalid_fd) fd.close();
         bun.debugAssert(fd.kind == .system);
@@ -1193,9 +1208,12 @@ pub const StandaloneModuleGraph = struct {
         }
 
         var buf: bun.PathBuffer = undefined;
-        const temp_location = bun.getFdPath(fd, &buf) catch |err| {
-            return CompileResult.failFmt("failed to get path for fd: {s}", .{@errorName(err)});
-        };
+        const temp_location = if (comptime Environment.isOpenBSD)
+            bun.sliceTo(&injected_temp_path_buf, 0)
+        else
+            bun.getFdPath(fd, &buf) catch |err| {
+                return CompileResult.failFmt("failed to get path for fd: {s}", .{@errorName(err)});
+            };
         const temp_posix = std.posix.toPosixPath(temp_location) catch |err| {
             return CompileResult.failFmt("path too long: {s}", .{@errorName(err)});
         };

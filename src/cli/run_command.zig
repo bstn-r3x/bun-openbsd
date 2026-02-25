@@ -1312,6 +1312,23 @@ pub const RunCommand = struct {
             Global.configureAllocator(.{ .long_running = true });
 
             absolute_script_path = brk: {
+                if (comptime Environment.isOpenBSD and !Environment.isWindows) {
+                    if (std.fs.path.isAbsolute(file_path)) break :brk file_path;
+
+                    var cwd_buf: bun.PathBuffer = undefined;
+                    const cwd = bun.getcwd(&cwd_buf) catch return false;
+                    cwd_buf[cwd.len] = std.fs.path.sep;
+                    var parts = [_]string{file_path};
+                    const joined = resolve_path.joinAbsStringBuf(
+                        cwd_buf[0 .. cwd.len + 1],
+                        &script_name_buf,
+                        &parts,
+                        .auto,
+                    );
+                    if (joined.len == 0) return false;
+                    break :brk joined;
+                }
+
                 if (comptime !Environment.isWindows) break :brk bun.getFdPath(file, &script_name_buf) catch return false;
 
                 var fd_path_buf: bun.PathBuffer = undefined;
