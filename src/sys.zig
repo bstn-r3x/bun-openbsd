@@ -49,6 +49,10 @@ pub const R_OK = 4;
 const log = bun.Output.scoped(.SYS, .visible);
 pub const syslog = log;
 
+// OpenBSD getFdPath fallback swaps process cwd via fchdir+getcwd.
+// Serialize this path to reduce cross-thread cwd races inside Bun.
+var openbsd_getfdpath_cwd_lock: bun.Mutex = .{};
+
 pub const syscall = switch (Environment.os) {
     .linux => std.os.linux,
     // macOS and OpenBSD require using libc
@@ -2751,6 +2755,9 @@ pub fn getFdPath(fd: bun.FileDescriptor, out_buffer: *bun.PathBuffer) Maybe([]u8
             return .{ .result = bun.sliceTo(out_buffer, 0) };
         },
         .openbsd => {
+            openbsd_getfdpath_cwd_lock.lock();
+            defer openbsd_getfdpath_cwd_lock.unlock();
+
             // OpenBSD doesn't have F_GETPATH or /proc/self/fd.
             // Use fchdir + getcwd workaround: save cwd, fchdir to fd, getcwd, restore.
             // This only works for directory FDs; for regular file FDs, fchdir will
