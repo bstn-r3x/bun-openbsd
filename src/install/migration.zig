@@ -16,6 +16,10 @@ pub fn detectAndLoadOtherLockfile(
         defer lockfile.close();
         var lockfile_path_buf: bun.PathBuffer = undefined;
         const lockfile_path = if (comptime bun.Environment.isOpenBSD) brk: {
+            if (bun.sys.File.from(dir).kind()) |kind| switch (kind) {
+                .directory => {},
+                else => break :brk "package-lock.json",
+            } else |_| break :npm;
             const dir_path = bun.getFdPathZ(dir, &lockfile_path_buf) catch break :npm;
             const dir_len = dir_path.len;
             @memcpy(lockfile_path_buf[0..dir_len], dir_path[0..dir_len]);

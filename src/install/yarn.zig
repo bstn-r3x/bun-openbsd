@@ -596,6 +596,10 @@ pub fn migrateYarnLockfile(
         const package_json_source = brk: {
             var package_json_path_buf: bun.PathBuffer = undefined;
             const package_json_path = if (comptime bun.Environment.isOpenBSD) brk: {
+                if (bun.sys.File.from(dir).kind()) |kind| switch (kind) {
+                    .directory => {},
+                    else => break :brk "package.json",
+                } else |_| return error.InvalidPackageJSON;
                 const dir_path = bun.getFdPath(dir, &package_json_path_buf) catch return error.InvalidPackageJSON;
                 const dir_len = dir_path.len;
                 @memcpy(package_json_path_buf[0..dir_len], dir_path[0..dir_len]);
