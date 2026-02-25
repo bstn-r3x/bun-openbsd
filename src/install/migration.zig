@@ -15,7 +15,14 @@ pub fn detectAndLoadOtherLockfile(
         const lockfile = File.openat(dir, "package-lock.json", bun.O.RDONLY, 0).unwrap() catch break :npm;
         defer lockfile.close();
         var lockfile_path_buf: bun.PathBuffer = undefined;
-        const lockfile_path = bun.getFdPathZ(lockfile.handle, &lockfile_path_buf) catch break :npm;
+        const lockfile_path = if (comptime bun.Environment.isOpenBSD) brk: {
+            const dir_path = bun.getFdPathZ(dir, &lockfile_path_buf) catch break :npm;
+            const dir_len = dir_path.len;
+            @memcpy(lockfile_path_buf[0..dir_len], dir_path[0..dir_len]);
+            lockfile_path_buf[dir_len..][0.."/package-lock.json".len].* = "/package-lock.json".*;
+            lockfile_path_buf[dir_len + "/package-lock.json".len] = 0;
+            break :brk lockfile_path_buf[0 .. dir_len + "/package-lock.json".len :0];
+        } else bun.getFdPathZ(lockfile.handle, &lockfile_path_buf) catch break :npm;
         const data = lockfile.readToEnd(allocator).unwrap() catch break :npm;
         const migrate_result = migrateNPMLockfile(this, manager, allocator, log, data, lockfile_path) catch |err| {
             if (err == error.NPMLockfileVersionMismatch) {
