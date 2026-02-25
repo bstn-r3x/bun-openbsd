@@ -53,6 +53,55 @@ pub const syslog = log;
 // Serialize this path to reduce cross-thread cwd races inside Bun.
 var openbsd_getfdpath_cwd_lock: bun.Mutex = .{};
 
+const openbsd_getfdpath_trace_state = struct {
+    var checked = false;
+    var enabled = false;
+    var fallback_calls: usize = 0;
+    var fallback_errors: usize = 0;
+};
+
+fn openbsdGetFdPathTraceEnabled() bool {
+    if (comptime !Environment.isOpenBSD) return false;
+    if (!openbsd_getfdpath_trace_state.checked) {
+        openbsd_getfdpath_trace_state.checked = true;
+        openbsd_getfdpath_trace_state.enabled = bun.getenvTruthy("BUN_OPENBSD_GETFDPATH_TRACE");
+    }
+    return openbsd_getfdpath_trace_state.enabled;
+}
+
+fn openbsdTraceGetFdPathFallback(fd: bun.FileDescriptor, event: []const u8, errno: ?E) void {
+    if (!openbsdGetFdPathTraceEnabled()) return;
+
+    if (std.mem.eql(u8, event, "enter")) {
+        openbsd_getfdpath_trace_state.fallback_calls += 1;
+    } else if (errno != null) {
+        openbsd_getfdpath_trace_state.fallback_errors += 1;
+    }
+
+    if (errno) |err| {
+        std.debug.print(
+            "[bun-openbsd] getFdPath(openbsd fallback) fd={d} event={s} errno={s} calls={d} errors={d}\n",
+            .{
+                fd.cast(),
+                event,
+                @tagName(err),
+                openbsd_getfdpath_trace_state.fallback_calls,
+                openbsd_getfdpath_trace_state.fallback_errors,
+            },
+        );
+    } else {
+        std.debug.print(
+            "[bun-openbsd] getFdPath(openbsd fallback) fd={d} event={s} calls={d} errors={d}\n",
+            .{
+                fd.cast(),
+                event,
+                openbsd_getfdpath_trace_state.fallback_calls,
+                openbsd_getfdpath_trace_state.fallback_errors,
+            },
+        );
+    }
+}
+
 pub const syscall = switch (Environment.os) {
     .linux => std.os.linux,
     // macOS and OpenBSD require using libc
@@ -2755,6 +2804,7 @@ pub fn getFdPath(fd: bun.FileDescriptor, out_buffer: *bun.PathBuffer) Maybe([]u8
             return .{ .result = bun.sliceTo(out_buffer, 0) };
         },
         .openbsd => {
+            openbsdTraceGetFdPathFallback(fd, "enter", null);
             openbsd_getfdpath_cwd_lock.lock();
             defer openbsd_getfdpath_cwd_lock.unlock();
 
@@ -2762,18 +2812,28 @@ pub fn getFdPath(fd: bun.FileDescriptor, out_buffer: *bun.PathBuffer) Maybe([]u8
             // Use fchdir + getcwd workaround: save cwd, fchdir to fd, getcwd, restore.
             // This only works for directory FDs; for regular file FDs, fchdir will
             // fail with ENOTDIR.
-            const prev_fd = posix.openatZ(posix.AT.FDCWD, ".", .{ .DIRECTORY = true }, 0) catch
-                return .{ .err = .{ .errno = @intFromEnum(getErrno(@as(i64, -1))), .syscall = .open, .fd = fd } };
+            const prev_fd = posix.openatZ(posix.AT.FDCWD, ".", .{ .DIRECTORY = true }, 0) catch {
+                const errno = getErrno(@as(i64, -1));
+                openbsdTraceGetFdPathFallback(fd, "open-cwd-fd-fail", errno);
+                return .{ .err = .{ .errno = @intFromEnum(errno), .syscall = .open, .fd = fd } };
+            };
             var needs_restore = false;
             defer {
                 if (needs_restore) posix.fchdir(prev_fd) catch {};
                 posix.close(prev_fd);
             }
-            posix.fchdir(fd.cast()) catch
-                return .{ .err = .{ .errno = @intFromEnum(getErrno(@as(i64, -1))), .syscall = .fchdir, .fd = fd } };
+            posix.fchdir(fd.cast()) catch {
+                const errno = getErrno(@as(i64, -1));
+                openbsdTraceGetFdPathFallback(fd, "fchdir-fail", errno);
+                return .{ .err = .{ .errno = @intFromEnum(errno), .syscall = .fchdir, .fd = fd } };
+            };
             needs_restore = true;
-            const result = posix.getcwd(out_buffer) catch
-                return .{ .err = .{ .errno = @intFromEnum(getErrno(@as(i64, -1))), .syscall = .getcwd, .fd = fd } };
+            const result = posix.getcwd(out_buffer) catch {
+                const errno = getErrno(@as(i64, -1));
+                openbsdTraceGetFdPathFallback(fd, "getcwd-fail", errno);
+                return .{ .err = .{ .errno = @intFromEnum(errno), .syscall = .getcwd, .fd = fd } };
+            };
+            openbsdTraceGetFdPathFallback(fd, "success", null);
             return .{ .result = result };
         },
         .linux => {

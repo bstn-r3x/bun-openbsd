@@ -956,6 +956,10 @@ pub const CopyFileWindows = struct {
                                     return;
                                 },
                                 else => {
+                                    if (comptime bun.Environment.isOpenBSD) {
+                                        this.prepareReadWriteLoop();
+                                        return;
+                                    }
                                     const out = bun.getFdPath(fd, &pathbuf1) catch {
                                         // This case can happen when either:
                                         // - NUL device
@@ -994,6 +998,10 @@ pub const CopyFileWindows = struct {
                                     return;
                                 },
                                 else => {
+                                    if (comptime bun.Environment.isOpenBSD) {
+                                        this.prepareReadWriteLoop();
+                                        return;
+                                    }
                                     const out = bun.getFdPath(fd, &pathbuf2) catch {
                                         // This case can happen when either:
                                         // - NUL device

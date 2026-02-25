@@ -582,6 +582,12 @@ fn getMain(globalThis: *jsc.JSGlobalObject) callconv(jsc.conv) jsc.JSValue {
                 break :use_resolved_path;
             }
 
+            if (comptime Environment.isOpenBSD) {
+                // Avoid reverse-resolving regular file FDs on OpenBSD.
+                // The getFdPath fallback is directory-FD oriented there.
+                break :use_resolved_path;
+            }
+
             const fd = bun.sys.openatA(
                 if (comptime Environment.isWindows) bun.invalid_fd else bun.FD.cwd(),
                 vm.main,
