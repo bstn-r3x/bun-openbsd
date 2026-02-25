@@ -5561,7 +5561,9 @@ pub const NodeFS = struct {
 
         defer fd.close();
 
-        const buf = switch (Syscall.getFdPath(fd, &outbuf)) {
+        const buf = if (comptime Environment.isOpenBSD)
+            path[0..path_.len]
+        else switch (Syscall.getFdPath(fd, &outbuf)) {
             .err => |err| return .{ .err = err.withPath(path) },
             .result => |buf_| buf_,
         };
