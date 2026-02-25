@@ -51,8 +51,8 @@ pub const syslog = log;
 
 pub const syscall = switch (Environment.os) {
     .linux => std.os.linux,
-    // macOS requires using libc
-    .mac => std.c,
+    // macOS and OpenBSD require using libc
+    .mac, .openbsd => std.c,
     .windows, .wasm => @compileError("not implemented"),
 };
 
@@ -237,6 +237,7 @@ pub const Tag = enum(u8) {
     getcwd,
     getenv,
     chdir,
+    fchdir,
     fcopyfile,
     recv,
     send,
@@ -2046,6 +2047,7 @@ pub fn poll(fds: []std.posix.pollfd, timeout: i32) Maybe(usize) {
         const rc = switch (Environment.os) {
             .mac => darwin_nocancel.@"poll$NOCANCEL"(fds.ptr, fds.len, timeout),
             .linux => linux.poll(fds.ptr, fds.len, timeout),
+            .openbsd => syscall.poll(fds.ptr, fds.len, timeout),
             .wasm => @compileError("poll is not implemented on this platform"),
         };
         if (Maybe(usize).errnoSys(rc, .poll)) |err| {
@@ -2061,6 +2063,7 @@ pub fn ppoll(fds: []std.posix.pollfd, timeout: ?*std.posix.timespec, sigmask: ?*
         const rc = switch (Environment.os) {
             .mac => darwin_nocancel.@"ppoll$NOCANCEL"(fds.ptr, fds.len, timeout, sigmask),
             .linux => linux.ppoll(fds.ptr, fds.len, timeout, sigmask),
+            .openbsd => syscall.ppoll(fds.ptr, fds.len, timeout, sigmask),
             .wasm => @compileError("ppoll is not implemented on this platform"),
         };
         if (Maybe(usize).errnoSys(rc, .ppoll)) |err| {
@@ -2746,6 +2749,25 @@ pub fn getFdPath(fd: bun.FileDescriptor, out_buffer: *bun.PathBuffer) Maybe([]u8
             }
 
             return .{ .result = bun.sliceTo(out_buffer, 0) };
+        },
+        .openbsd => {
+            // OpenBSD doesn't have F_GETPATH or /proc/self/fd.
+            // Use fchdir + getcwd workaround: save cwd, fchdir to fd, getcwd, restore.
+            // This only works for directory FDs; for regular file FDs, fchdir will
+            // fail with ENOTDIR.
+            const prev_fd = posix.openatZ(posix.AT.FDCWD, ".", .{ .DIRECTORY = true }, 0) catch
+                return .{ .err = .{ .errno = @intFromEnum(getErrno(@as(i64, -1))), .syscall = .open, .fd = fd } };
+            var needs_restore = false;
+            defer {
+                if (needs_restore) posix.fchdir(prev_fd) catch {};
+                posix.close(prev_fd);
+            }
+            posix.fchdir(fd.cast()) catch
+                return .{ .err = .{ .errno = @intFromEnum(getErrno(@as(i64, -1))), .syscall = .fchdir, .fd = fd } };
+            needs_restore = true;
+            const result = posix.getcwd(out_buffer) catch
+                return .{ .err = .{ .errno = @intFromEnum(getErrno(@as(i64, -1))), .syscall = .getcwd, .fd = fd } };
+            return .{ .result = result };
         },
         .linux => {
             // TODO: alpine linux may not have /proc/self

@@ -1198,6 +1198,13 @@ pub fn getFdPath(fd: FileDescriptor, buf: *bun.PathBuffer) ![]u8 {
             ProcSelfWorkAroundForDebugging.has_checked = true;
             needs_proc_self_workaround = bun.env_var.BUN_NEEDS_PROC_SELF_WORKAROUND.get();
         }
+    } else if (comptime Environment.isOpenBSD) {
+        // OpenBSD has no /proc/self/fd or F_GETPATH; delegate to sys.getFdPath
+        // which uses the fchdir+getcwd workaround.
+        return switch (sys.getFdPath(fd, buf)) {
+            .result => |result| result,
+            .err => |err| return errnoToZigErr(err.errno),
+        };
     } else if (comptime !Environment.isLinux) {
         return try std.os.getFdPath(fd.native(), buf);
     }
