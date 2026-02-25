@@ -57,3 +57,38 @@ A clean OpenBSD rebuild currently requires more than the latest syscall fixes. I
 - `src/install/isolated_install/Installer.zig` behavior needed for stable workspace installs in this workflow
 
 This is why validating only one or two fresh commits against a clean upstream checkout is not enough yet; the local buildable OpenBSD workspace typically carries a broader patch stack.
+
+
+## OpenBSD `getFdPath` Strategy (Robustness Plan)
+
+### Current State
+
+OpenBSD lacks the common fd-to-path helpers used on other platforms (`F_GETPATH`, `/proc/self/fd` path resolution).
+The current Bun fallback in `src/sys.zig` uses:
+- save cwd fd
+- `fchdir(fd)`
+- `getcwd()`
+- restore cwd
+
+This works for directory FDs only. Regular file FDs return `ENOTDIR`.
+
+Recent hardening in this fork:
+- preserves `getFdPath` errno semantics on OpenBSD
+- avoids `getFdPath()` on several regular-file FD callsites by propagating known paths
+- serializes the cwd-swapping fallback with a process-global mutex (risk reduction)
+
+### Preferred Direction (Most Robust)
+
+The long-term fix is not a more complex cwd workaround. It is to avoid needing fd->path reverse lookup wherever the path is already known.
+
+Preferred pattern:
+- carry path strings forward when opening files/directories
+- avoid calling `getFdPath()` on regular file descriptors on OpenBSD
+- treat `getFdPath()` as a directory-FD-only / last-resort API on OpenBSD
+
+### Practical Roadmap
+
+1. Continue replacing high-impact regular-file FD `getFdPath` callsites with path propagation.
+2. Keep OpenBSD command-level fd-path regression smokes in the maintainer workflow (`run`, install migrations, standalone compile, fd-based copy path).
+3. Add helper patterns for “open file + keep path” flows to reduce regression risk.
+4. Reassess whether any non-cwd-mutating directory-FD path strategy is realistically available on OpenBSD; if not, keep the serialized fallback but make it rare.
