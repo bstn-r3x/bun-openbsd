@@ -702,7 +702,11 @@ pub fn init(
                     const json_buf = try ctx.allocator.alloc(u8, json_stat_size + 64);
                     defer ctx.allocator.free(json_buf);
                     const json_len = try json_file.preadAll(json_buf, 0);
-                    const json_path = try bun.getFdPath(.fromStdFile(json_file), &root_package_json_path_buf);
+                    const json_path = if (comptime bun.Environment.isOpenBSD) brk: {
+                        const plen = parent_without_trailing_slash.len + "/package.json".len;
+                        @memcpy(root_package_json_path_buf[0..plen], parent_path_buf[0..plen]);
+                        break :brk root_package_json_path_buf[0..plen];
+                    } else try bun.getFdPath(.fromStdFile(json_file), &root_package_json_path_buf);
                     const json_source = logger.Source.initPathString(json_path, json_buf[0..json_len]);
                     initializeStore();
                     const json = try JSON.parsePackageJSONUTF8(&json_source, ctx.log, ctx.allocator);
@@ -772,7 +776,15 @@ pub fn init(
     bun.copy(u8, &cwd_buf, fs.top_level_dir);
     cwd_buf[fs.top_level_dir.len] = 0;
     fs.top_level_dir = cwd_buf[0..fs.top_level_dir.len :0];
-    root_package_json_path = try bun.getFdPathZ(.fromStdFile(root_package_json_file), &root_package_json_path_buf);
+    root_package_json_path = if (comptime bun.Environment.isOpenBSD) brk: {
+        // OpenBSD lacks F_GETPATH and /proc/self/fd; getFdPath uses fchdir+getcwd
+        // which fails with NotDir on regular file fds. We already know the path.
+        const dir = fs.top_level_dir;
+        @memcpy(root_package_json_path_buf[0..dir.len], dir);
+        root_package_json_path_buf[dir.len..][0.."/package.json".len].* = "/package.json".*;
+        root_package_json_path_buf[dir.len + "/package.json".len] = 0;
+        break :brk root_package_json_path_buf[0 .. dir.len + "/package.json".len :0];
+    } else try bun.getFdPathZ(.fromStdFile(root_package_json_file), &root_package_json_path_buf);
 
     const entries_option = try fs.fs.readDirectory(fs.top_level_dir, null, 0, true);
     if (entries_option.* == .err) {

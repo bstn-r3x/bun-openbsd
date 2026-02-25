@@ -672,7 +672,16 @@ pub const Repository = extern struct {
         };
         defer json_file.close();
 
-        const json_path = json_file.getPath(
+        const json_path = if (comptime bun.Environment.isOpenBSD) blk: {
+            // OpenBSD: getFdPath uses fchdir+getcwd which fails on regular file FDs.
+            // Construct path from cache_directory_path + folder_name + "/package.json".
+            break :blk Path.joinAbsStringBuf(
+                PackageManager.get().cache_directory_path,
+                &json_path_buf,
+                &.{ folder_name, "package.json" },
+                .auto,
+            );
+        } else json_file.getPath(
             &json_path_buf,
         ).unwrap() catch |err| {
             log.addErrorFmt(

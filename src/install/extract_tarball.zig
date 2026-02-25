@@ -481,7 +481,14 @@ fn extract(this: *const ExtractTarball, log: *logger.Log, tgz_bytes: []const u8)
             return error.InstallFailed;
         };
         defer json_file.close();
-        json_path = json_file.getPath(
+        json_path = if (comptime bun.Environment.isOpenBSD) blk: {
+            // OpenBSD: getFdPath uses fchdir+getcwd which fails on regular file FDs.
+            // Construct the path from final_path (already resolved directory) + "/package.json".
+            const pj = "/package.json";
+            @memcpy(json_path_buf[0..final_path.len], final_path);
+            @memcpy(json_path_buf[final_path.len..][0..pj.len], pj);
+            break :blk json_path_buf[0 .. final_path.len + pj.len];
+        } else json_file.getPath(
             &json_path_buf,
         ).unwrap() catch |err| {
             log.addErrorFmt(

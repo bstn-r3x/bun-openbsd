@@ -1249,7 +1249,15 @@ pub const PackageInstall = struct {
         // cache_dir_subpath in here is actually the full path to the symlink pointing to the linked package
         const symlinked_path = this.cache_dir_subpath;
         var to_buf: bun.PathBuffer = undefined;
-        const to_path = this.cache_dir.realpath(symlinked_path, &to_buf) catch |err|
+        const to_path = if (comptime Environment.isOpenBSD) blk: {
+            // OpenBSD doesn't support getFdPath so std.fs.Dir.realpath fails.
+            // Use libc realpath directly since symlinked_path is an absolute path.
+            const symlinked_z = std.posix.toPosixPath(symlinked_path) catch |err|
+                return Result.fail(err, .linking_dependency, @errorReturnTrace());
+            const result = std.c.realpath(&symlinked_z, &to_buf) orelse
+                return Result.fail(error.FileNotFound, .linking_dependency, @errorReturnTrace());
+            break :blk std.mem.sliceTo(result, 0);
+        } else this.cache_dir.realpath(symlinked_path, &to_buf) catch |err|
             return Result.fail(err, .linking_dependency, @errorReturnTrace());
 
         const dest = std.fs.path.basename(dest_path);

@@ -700,7 +700,7 @@ pub const Installer = struct {
                                 cached_package_dir.?,
                                 src,
                                 dest_subpath,
-                                &.{},
+                                &.{comptime bun.OSPathLiteral("node_modules")},
                             );
                             defer hardlinker.deinit();
 
@@ -767,7 +767,7 @@ pub const Installer = struct {
                                 cached_package_dir.?,
                                 src_path,
                                 dest_subpath,
-                                &.{},
+                                &.{comptime bun.OSPathLiteral("node_modules")},
                             );
                             defer file_copier.deinit();
 
